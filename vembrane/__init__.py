@@ -14,7 +14,7 @@ from typing import Iterator, List, Dict, Any
 import yaml
 from pysam import VariantFile, VariantRecord, VariantHeader
 
-from vembrane.ann_types import type_ann, NA, type_info
+from vembrane.ann_types import NA, type_info, ANN_TYPER
 from vembrane.errors import (
     UnknownAnnotation,
     UnknownInfoField,
@@ -63,6 +63,18 @@ class Format:
             raise UnknownSample(self._record_idx, ke)
 
 
+class Info:
+    def __init__(self, record_idx: int, info_dict: Dict[str, Dict[str, Any]]):
+        self._record_idx = record_idx
+        self._info_dict = info_dict
+
+    def __getitem__(self, item):
+        try:
+            return self._info_dict[item]
+        except KeyError as ke:
+            raise UnknownInfoField(self._record_idx, ke)
+
+
 class Annotation:
     def __init__(self, record_idx: int, annotation_data: Dict[str, Any]):
         self._record_idx = record_idx
@@ -100,15 +112,12 @@ def eval_expression(
         idx,
         dict(
             map(
-                lambda v: type_ann(v[0], v[1]),
+                lambda v: ANN_TYPER.convert(v[0], v[1]),
                 zip(annotation_keys, parse_annotation_entry(annotation)),
             )
         ),
     )
-    try:
-        return eval(expression, globals_whitelist, env)
-    except NameError as ne:
-        raise UnknownInfoField(idx, str(ne).split("'")[1])
+    return eval(expression, globals_whitelist, env)
 
 
 def filter_vcf(
@@ -132,12 +141,13 @@ def filter_vcf(
         env["CHROM"] = record.chrom
         env["POS"] = record.pos
         env["ID"] = record.id
-        (env["REF"], env["ALT"]) = chain(record.alleles)
+        (env["REF"], *env["ALT"]) = chain(record.alleles)
         env["QUAL"] = type_info(record.qual)
         env["FILTER"] = record.filter
-        for key in record.info:
-            if key != ann_key:
-                env[key] = type_info(record.info[key])
+        env["INFO"] = Info(
+            idx,
+            {key: type_info(record.info[key]) for key in record.info if key != ann_key},
+        )
 
         formats = {
             sample: Sample(
